@@ -1,0 +1,55 @@
+from pyspark.sql import functions as F
+from pyspark.sql.functions import col, lit
+from pyspark.sql.utils import AnalysisException
+
+MIN_VOTES_THRESHOLD = 10000 
+print(f"Applying minimum vote threshold: {MIN_VOTES_THRESHOLD:,} votes.")
+
+
+# 1. Join basics and ratings
+df_movie_data = df_basics.join(df_ratings, on="tconst", how="inner")
+
+# 2. Filter for 'movie', 'Comedy', and minimum votes
+df_meaningful_comedy_movies = df_movie_data.filter(
+    (col("titleType") == "movie") & 
+    (col("genres").contains("Comedy")) &
+    (col("numVotes") >= MIN_VOTES_THRESHOLD) 
+)
+
+# 3. Order by rating (desc) then votes (desc) and select the top one
+highest_rated_comedy = df_meaningful_comedy_movies.orderBy(
+    col("averageRating").desc(), 
+    col("numVotes").desc()
+).select("tconst", "primaryTitle", "averageRating", "numVotes").limit(1)
+
+print("\nHighest Rated Comedy 'Movie' (STATISTICALLY SIGNIFICANT):")
+highest_rated_comedy.show(truncate=False)
+
+try:
+    best_movie_details = highest_rated_comedy.collect()[0]
+    best_movie_tconst = best_movie_details["tconst"]
+    best_movie_title = best_movie_details["primaryTitle"]
+    
+    print(f"--- RESULTS FOR {best_movie_title} (tconst: {best_movie_tconst}) ---")
+
+    # Who was the director of the movie?
+    print(f"\nDirector(s) of '{best_movie_title}':")
+    df_directors = df_crew.filter(col("tconst") == lit(best_movie_tconst)) \
+                          .select(F.explode(F.split(col("directors"), ",")).alias("nconst")) \
+                          .join(df_names.select("nconst", "primaryName"), on="nconst", how="inner")
+    
+    df_directors.select(col("primaryName").alias("Director Name")).distinct().show(truncate=False)
+    
+    # List, if any, the alternate titles for the movie.
+    print(f"\nAlternate titles for '{best_movie_title}':")
+    df_alternate_titles = df_akas.filter(col("tconst") == lit(best_movie_tconst)) \
+                                 .select("title", "region", "language") \
+                                 .orderBy("region", "language")
+    
+    df_alternate_titles.show(truncate=False)
+    
+except IndexError:
+    print(f"ANALYTICAL ERROR: No comedy movies found with at least {MIN_VOTES_THRESHOLD} votes. Try lowering the threshold.")
+except AnalysisException as e:
+     print(f" ANALYSIS ERROR (Check Join/Column Names): {e}")
+     
